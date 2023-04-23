@@ -1,0 +1,67 @@
+#include <mpi.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <omp.h>
+
+#define N 1000
+#define CHUNKSIZE 10
+
+int main(int argc, char** argv) {
+    int rank, size, num_threads;
+    int i, j, k;
+    double a[N][N], b[N][N], c[N][N];
+    double start_time, end_time;
+
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    // Determine number of threads available in each MPI process
+    #pragma omp parallel
+    {
+        num_threads = omp_get_num_threads();
+    }
+
+    // Initialize matrices A and B
+    if (rank == 0) {
+        for (i = 0; i < N; i++) {
+            for (j = 0; j < N; j++) {
+                a[i][j] = i + j;
+                b[i][j] = i - j;
+            }
+        }
+    }
+
+    // Distribute rows of matrix A to different processes
+    MPI_Scatter(a, N*N/size, MPI_DOUBLE, a[rank*N/size], N*N/size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+    // Broadcast matrix B to all processes
+    MPI_Bcast(b, N*N, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+    // Perform matrix multiplication with OpenMP parallelization
+    start_time = MPI_Wtime();
+    #pragma omp parallel shared(a,b,c) private(i,j,k)
+    {
+        #pragma omp for schedule(static, CHUNKSIZE)
+        for (i = rank*N/size; i < (rank+1)*N/size; i++) {
+            for (j = 0; j < N; j++) {
+                c[i][j] = 0.0;
+                for (k = 0; k < N; k++) {
+                    c[i][j] += a[i][k] * b[k][j];
+                }
+            }
+        }
+    }
+    end_time = MPI_Wtime();
+
+    // Gather rows of matrix C from different processes
+    MPI_Gather(c[rank*N/size], N*N/size, MPI_DOUBLE, c, N*N/size, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
+    if (rank == 0) {
+        printf("Time taken: %lf seconds\n", end_time - start_time);
+    }
+
+    MPI_Finalize();
+
+    return 0;
+}
